@@ -2,46 +2,66 @@ import os
 import subprocess
 import time
 import threading
-from flask import Flask
+import signal
+from flask import Flask, jsonify
 
 app = Flask(__name__)
 
 APP_SCRIPT = "app.py"
 CHECK_INTERVAL = 300  # 5 minutes
 process = None
+lock = threading.Lock()
 
-def is_process_running(name):
-    try:
-        # Use pgrep to check if script is running
-        output = subprocess.check_output(["pgrep", "-f", name])
-        return bool(output.strip())
-    except subprocess.CalledProcessError:
-        return False
-
-def start_app():
+def start_bot():
     global process
-    print(f"Starting {APP_SCRIPT}...")
-    process = subprocess.Popen(["python3", APP_SCRIPT])
+    with lock:
+        if process and process.poll() is None:
+            return
 
-def monitor_app():
+        print("🚀 Starting Telegram bot...")
+        process = subprocess.Popen(
+            ["python3", APP_SCRIPT],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            preexec_fn=os.setsid
+        )
+
+def is_running():
+    return process is not None and process.poll() is None
+
+def monitor():
     while True:
-        if not is_process_running(APP_SCRIPT):
-            print(f"{APP_SCRIPT} is not running. Restarting...")
-            start_app()
-        else:
-            print(f"{APP_SCRIPT} is running.")
+        with lock:
+            if not is_running():
+                print("❌ Bot stopped. Restarting...")
+                start_bot()
+            else:
+                print("✅ Bot running")
         time.sleep(CHECK_INTERVAL)
 
 @app.route("/")
-def status():
-    running = is_process_running(APP_SCRIPT)
-    return f"{APP_SCRIPT} is {'running ✅' if running else 'not running ❌'}."
+def health():
+    return jsonify({
+        "status": "ok",
+        "bot": "running" if is_running() else "stopped",
+        "service": "neon-titanium"
+    })
+
+def shutdown(*_):
+    global process
+    print("🛑 Shutting down supervisor...")
+    if process and process.poll() is None:
+        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    os._exit(0)
 
 if __name__ == "__main__":
-    # Start monitor in background
-    monitor_thread = threading.Thread(target=monitor_app)
-    monitor_thread.daemon = True
-    monitor_thread.start()
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
 
-    # Start Flask app
-    app.run(host="0.0.0.0", port=8000)
+    start_bot()
+
+    t = threading.Thread(target=monitor, daemon=True)
+    t.start()
+
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
