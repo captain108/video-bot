@@ -665,7 +665,11 @@ async def _main():
         try: await app.stop()
         except: pass
 
+def run():
+    asyncio.run(_main())
+
 if __name__ == "__main__":
-    try: asyncio.run(_main())
+    run()
+
     except (KeyboardInterrupt, SystemExit): print("Shutting down...")
     except Exception as e: print("Fatal error in main:", e)
